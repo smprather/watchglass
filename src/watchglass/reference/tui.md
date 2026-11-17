@@ -2,9 +2,10 @@
 
 `watchglass tui` is a live view of what the service is doing: every watch with its state and how long
 until its next poll, and the stream of actions with their results. It reads `status.json` once a second and
-follows the log file. Its only write is a poke request - `p` asks the running service to poll the selected
-watch now. Everything else it touches is the service lock file it opens to ask whether the service is
-running, so it is safe beside a running service, and several monitors may run at once.
+follows the log file. Its writes are two control files: a poke request - `p` asks the running service to poll the
+selected watch now - and `x`, which deletes the selected watch's `alerts.json` (the same as `watchglass ack`).
+Everything else it touches is the service lock file it opens to ask whether the service is running, so it is
+safe beside a running service, and several monitors may run at once.
 
 `status.json` carries a `format` number (currently 1): new fields are added without notice, and that number goes
 up only if an existing field changes meaning, so a consumer can rely on the ones it knows.
@@ -14,13 +15,14 @@ up only if an existing field changes meaning, so a consumer can rely on the ones
 - **The banner**: whether the service is running, its pid and version, and how old the status is. When the
   service is not running — or its status is more than a few seconds old — the age is marked stale, `NEXT` shows
   `—` instead of a countdown, and the rest is the last known status.
-- **The table**: one row per watch. `WATCH`; `STATE` (`online`, `waiting`, `polling`, `transferring`, `offline`,
-  `parked`, `idle`, `invalid`, `orphaned`); `COND`; `FAIL`; `LAST` (outcome and age); `NEXT` (a countdown, `due`,
-  or `retry …` for an offline watch); `OBS` (running observers); and `NOTE`, the first thing that is wrong: an
-  invalid config, a config error, a missing directory, orphaned state, `waiting: <reason>` when the last check
-  answered `unknown`, `last failure: dropped mid-transfer` (or `unreachable`, `refused overwrite`, `auth rejected`,
-  `timed out`) when the last attempt failed, queued events, a user-disabled watch — or, while a transfer runs, the
-  file being moved. On a narrow screen `FAIL`/`OBS` and then `COND`/`NEXT` go, but `NOTE` stays: why a watch is
+- **The table**: one row per watch. `WATCH`; `STATE` (`online`, `degraded`, `waiting`, `polling`, `transferring`,
+  `offline`, `parked`, `idle`, `invalid`, `orphaned`); `COND`; `FAIL`; `LAST` (outcome and age); `NEXT` (a
+  countdown, `due`, or `retry …` for an offline watch); `OBS` (running observers); and `NOTE`, the first thing
+  that is wrong: an invalid config, a config error, a missing directory, orphaned state, `1 alert: <message>
+  (2h ago)` while an unacknowledged `ctx.alert` exists (a later green poll cannot hide it), `waiting: <reason>`
+  when the last check answered `unknown`, `last failure: dropped mid-transfer` (or `unreachable`, `refused
+  overwrite`, `auth rejected`, `timed out`) when the last attempt failed, queued events, a user-disabled watch —
+  or, while a transfer runs, the file being moved. On a narrow screen `FAIL`/`OBS` and then `COND`/`NEXT` go, but `NOTE` stays: why a watch is
   not moving matters most there.
 - **What is running right now**: the service puts the hook it is running (`in_flight`) and what that hook is
   transferring (`transfer`, with the partial file's size) into `status.json`, so `watchglass status` and this
@@ -64,6 +66,7 @@ A record that watchglass does not recognise yet stays visible at verbose rather 
 | `v` | cycle the pane's verbosity: quiet → normal → verbose |
 | `space` | pause the pane (records keep arriving; the header counts them) |
 | `p` | poke the selected watch: ask the running service to poll it now |
+| `x` | acknowledge the selected watch's alerts (deletes its `alerts.json`): `degraded` back to `online` |
 | `r` | re-read the config now (new and removed watches) |
 
 The mouse works too: a click selects a row, a double-click on a watch pokes it (the same request as

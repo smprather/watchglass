@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from watchglass.alertstore import clear_alerts, record_alert
 from watchglass.locks import hold_lock
 from watchglass.logstore import LogWriter, make_record
 from watchglass.offline import OfflineMarker, iso_time, write_offline
@@ -524,3 +525,31 @@ def test_a_running_transfer_note_keeps_the_file_and_adds_the_last_failure(xdg, m
         [row] = monitor.status().watches
     assert row.state == "transferring"
     assert monitor_module.note_text(row) == "big.bin · last failure: dropped mid-transfer"
+
+
+def test_alerts_mark_a_watch_degraded_and_name_the_alert(xdg, make_watch):
+    """A later green poll must not wash out an unacknowledged failure (issue 45)."""
+    make_watch("a", config='[hooks]\ncheck = ["true"]\n')
+    publish(xdg, status_document(watches={"a": entry(failures=0)}))
+    record_alert(xdg, "a", "psg-env-2026.11.16_1 failed SHA-256", now=time.time() - 7200)
+    monitor = Monitor(xdg, xdg.config_file)
+    with running(xdg):
+        monitor.refresh()
+        row = rows_by_name(monitor.status())["a"]
+    assert row.state == "degraded"
+    assert monitor_module.note_text(row) == "1 alert: psg-env-2026.11.16_1 failed SHA-256 (2h ago)"
+    assert monitor_module.state_style(row.state) == "yellow"
+    clear_alerts(xdg, "a")
+    with running(xdg):
+        monitor.refresh()
+        row = rows_by_name(monitor.status())["a"]
+    assert row.state == "online" and monitor_module.note_text(row) == ""
+
+
+def test_alerts_outrank_idle_when_the_service_is_not_running(xdg, make_watch):
+    """Unacknowledged work is never reported as idle just because nobody is polling."""
+    make_watch("a", config='[hooks]\ncheck = ["true"]\n')
+    record_alert(xdg, "a", "one item failed", now=time.time() - 60)
+    monitor = Monitor(xdg, xdg.config_file)
+    monitor.refresh()
+    assert rows_by_name(monitor.status())["a"].state == "degraded"

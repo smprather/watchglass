@@ -31,6 +31,13 @@ The payload must be JSON-serializable and at most 1 MiB once encoded. `pathlib.P
 
 An action succeeds when it returns and fails when it raises. Its return value is ignored. `ctx.run` raises `watchglass.CommandFailed` for a nonzero exit, so a failed command fails the action unless you catch it.
 
+## Alerts
+
+`ctx.alert("...")` records an unacknowledged failure and keeps the watch polling: use it in an action when a
+bad item is quarantined and stopping the whole watch would be the wrong response. It writes the watch's
+`alerts.json`, logs `watch.alert` and runs `alert_command`; `watchglass status` then shows the watch as
+`degraded` until `watchglass ack NAME`. See `watchglass docs failures`. It is refused in `check`.
+
 ## Rules
 
 - **check MUST only observe.** It must not change anything outside `ctx.run_dir`: `watchglass poll --dry-run` runs real checks, and ledgers are read-only inside `check` (writing raises `watchglass.LedgerReadOnly`).

@@ -74,6 +74,9 @@ class Paths:
     def offline_file(self, watch: str) -> Path:
         return self.watch_state_dir(watch) / "offline.json"
 
+    def alert_file(self, watch: str) -> Path:
+        return self.watch_state_dir(watch) / "alerts.json"
+
     def watch_lock(self, watch: str) -> Path:
         return self.runtime / "locks" / f"{watch}.lock"
 

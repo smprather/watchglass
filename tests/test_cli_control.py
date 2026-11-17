@@ -1,6 +1,7 @@
 
 from click.testing import CliRunner
 
+from watchglass.alertstore import read_alerts, record_alert
 from watchglass.cli import cli
 from watchglass.locks import hold_lock
 from watchglass.offline import read_offline
@@ -111,3 +112,49 @@ def test_help_shows_every_panel(xdg):
         assert panel in output
     for command in ("run", "validate", "poll", "status", "logs", "enable", "disable", "poke", "rename"):
         assert f" {command} " in output
+
+
+def test_ack_clears_alerts_and_reports_the_count(xdg, make_watch):
+    make_watch("a", config='[hooks]\ncheck = ["true"]\n')
+    record_alert(xdg, "a", "psg-env-1 failed SHA-256")
+    record_alert(xdg, "a", "psg-env-2 failed SHA-256")
+    result = run("ack", "a")
+    assert result.exit_code == 0, result.output
+    assert "a: acknowledged 2 alerts" in result.output
+    assert read_alerts(xdg, "a") == []
+    assert "no unacknowledged alerts" in run("ack", "a").output
+
+
+def test_ack_needs_a_watch_or_all_and_refuses_both(xdg, make_watch):
+    make_watch("a", config='[hooks]\ncheck = ["true"]\n')
+    neither = run("ack")
+    assert neither.exit_code == 1 and "give a watch name or --all" in neither.output
+    both = run("ack", "a", "--all")
+    assert both.exit_code == 1 and "not both" in both.output
+    unknown = run("ack", "nope")
+    assert unknown.exit_code == 1 and "no watch named" in unknown.output.lower()
+
+
+def test_ack_all_clears_every_watch_and_state_left_by_gone_watches(xdg, make_watch):
+    make_watch("a", config='[hooks]\ncheck = ["true"]\n')
+    make_watch("b", config='[hooks]\ncheck = ["true"]\n')
+    record_alert(xdg, "a", "one failed")
+    record_alert(xdg, "b", "two failed")
+    xdg.watch_state_dir("gone").mkdir(parents=True)
+    record_alert(xdg, "gone", "state of a deleted watch")
+    result = run("ack", "--all")
+    assert result.exit_code == 0, result.output
+    assert "a: acknowledged 1 alert" in result.output
+    assert "b: acknowledged 1 alert" in result.output
+    assert "gone: acknowledged 1 alert" in result.output
+    assert read_alerts(xdg, "a") == read_alerts(xdg, "b") == read_alerts(xdg, "gone") == []
+
+
+def test_enable_acknowledges_alerts_too(xdg, make_watch):
+    make_watch("a", config='[hooks]\ncheck = ["true"]\n')
+    run("disable", "a")
+    record_alert(xdg, "a", "one item failed")
+    result = run("enable", "a")
+    assert result.exit_code == 0, result.output
+    assert "a: acknowledged 1 alert" in result.output
+    assert read_alerts(xdg, "a") == []

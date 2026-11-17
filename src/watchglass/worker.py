@@ -145,6 +145,7 @@ def run_request(request: dict[str, Any], send: Send) -> dict[str, Any]:
         emit=send,
         shell=request.get("shell"),
         events=request.get("events") or [],
+        alerts_file=Path(request["alerts_file"]) if request.get("alerts_file") else None,
     )
     try:
         value = function(ctx)

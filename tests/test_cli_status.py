@@ -4,6 +4,7 @@ import time
 
 from click.testing import CliRunner
 
+from watchglass.alertstore import record_alert
 from watchglass.cli import cli
 from watchglass.locks import hold_lock
 from watchglass.offline import OfflineMarker, iso_time, write_offline
@@ -182,3 +183,73 @@ def test_status_says_why_the_last_attempt_failed(xdg, make_watch):
     assert result.exit_code == 0
     assert "last true FAILED" in result.output
     assert "last failure: dropped mid-transfer" in result.output
+
+
+def test_status_shows_degraded_and_points_at_the_ack_command(xdg, make_watch):
+    make_watch("a", config='[hooks]\ncheck = ["true"]\n')
+    record_alert(xdg, "a", "psg-env-2026.11.16_1 failed SHA-256", now=time.time() - 7200)
+    result = run("status")
+    assert result.exit_code == 0, result.output
+    line = next(line for line in result.output.splitlines() if line.startswith("a "))
+    assert "degraded" in line  # not green online, even though nothing is failing now
+    assert "1 unacknowledged alert: psg-env-2026.11.16_1 failed SHA-256" in result.output
+    assert "clear with: watchglass ack a" in result.output
+    data = json.loads(run("status", "--json").output)
+    assert data["watches"]["a"]["alerts"]["count"] == 1
+
+
+def test_a_polls_green_result_does_not_hide_the_alert(xdg, make_watch):
+    """The issue's exact failure mode: failures reset to 0, last_poll `true`, row used to read online."""
+    make_watch("a", config='[hooks]\ncheck = ["true"]\n')
+    write_json_atomic(xdg.status_file, {"format": 1,
+                  "service": {"running": True, "pid": 4711, "version": "2026.11.16", "started": iso_time(time.time()),
+                              "updated": iso_time(time.time()), "config": "x", "config_error": None, "only": []},
+                  "watches": {"a": {"enabled": True, "condition": True, "failures": 0, "offline": None,
+                                    "last_poll": {"at": iso_time(time.time()), "outcome": "true", "failed": False,
+                                                  "results": []},
+                                    "next_poll": None, "observers": {}, "in_flight": None, "transfer": None}},
+                  "invalid_watches": {}, "problems": []})
+    record_alert(xdg, "a", "one item failed and was quarantined", now=time.time() - 60)
+    ensure_private_dir(xdg.runtime)
+    with hold_lock(xdg.service_lock):
+        result = run("status")
+    assert "degraded" in result.output
+    assert "FAIL" not in result.output
+
+
+QUEUE_WATCH = '''
+import pathlib
+
+def check(ctx):
+    return True
+
+def on_true(ctx):
+    item = pathlib.Path("bad")
+    if item.exists():
+        ctx.alert(item.read_text())
+        item.unlink()
+'''
+
+
+def test_a_real_alert_reaches_status_json_and_ack_clears_it(xdg, make_watch):
+    """End to end through the service: hook -> alerts.json -> status.json -> status text -> ack."""
+    watch_dir = make_watch("a", files={"watch.py": QUEUE_WATCH})
+    (watch_dir / "bad").write_text("psg-env-1 failed SHA-256 verification")
+    ensure_private_dir(xdg.runtime)  # `watchglass run` does this; `Service` in-process does not
+    service = Service(paths=xdg, config_path=xdg.config_file, sink=lambda _record: None, start_threads=False)
+    service.start()
+    service.runners["a"].poll_once(time.time())
+    service.tick()
+    with hold_lock(xdg.service_lock):
+        data = json.loads(run("status", "--json").output)
+        text = run("status").output
+    assert data["watches"]["a"]["alerts"]["message"] == "psg-env-1 failed SHA-256 verification"
+    assert "degraded" in text and "unacknowledged alert" in text
+    assert run("ack", "a").exit_code == 0
+    service.tick()
+    with hold_lock(xdg.service_lock):
+        data = json.loads(run("status", "--json").output)
+        text = run("status").output
+    assert data["watches"]["a"]["alerts"] is None
+    assert re.search(r"^a\s+online\s", text, re.M)
+    service.stop()

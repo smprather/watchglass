@@ -29,6 +29,7 @@ FOLLOW_INTERVAL = 0.5  # the log is checked twice a second, as `watchglass logs 
 _STATE_STYLES = {
     "online": "green",
     "waiting": "yellow",
+    "degraded": "yellow",
     "polling": "yellow",
     "transferring": "cyan",
     "offline": "red",
@@ -377,6 +378,12 @@ def _note(entry: dict[str, Any], state: str) -> str:
             return "offline by user"
         if offline.get("permanent"):
             return "permanent: fix it, then watchglass enable"
+    alerts = entry.get("alerts")
+    if isinstance(alerts, dict) and isinstance(alerts.get("count"), int) and alerts["count"] > 0:
+        count = alerts["count"]
+        message = sanitize(str(alerts.get("message") or ""))
+        age = _age_text(alerts.get("since"), time.time())
+        return f"{count} alert{'s' if count != 1 else ''}: {message}" + (f" ({age} ago)" if age else "")
     if state == "waiting":
         last = entry.get("last_poll")
         reason = last.get("reason") if isinstance(last, dict) else None

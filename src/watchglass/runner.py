@@ -50,6 +50,7 @@ class HookCall:
     data_dir: Path
     run_dir: Path
     timeout: float
+    alerts_file: Path | None = None
     capture_bytes: int = 65_536
     environment: Mapping[str, str] = field(default_factory=dict)
     environment_file: Path | None = None
@@ -138,7 +139,7 @@ class _Reader(threading.Thread):
 class _MessageReader(threading.Thread):
     """Reads the worker's JSON-line messages as they arrive.
 
-    hello and result are kept. log and command messages are delivered (to
+    hello and result are kept. log, event, command and alert messages are delivered (to
     on_message, or kept in .messages without one) until `limit` bytes of them
     have been delivered; later ones are counted in dropped_bytes. A line longer
     than `limit` is skipped without being buffered whole.
@@ -190,7 +191,7 @@ class _MessageReader(threading.Thread):
                 self.hello = message
             elif kind == "result":
                 self.result = message
-            elif kind in ("log", "event", "command"):
+            elif kind in ("log", "event", "command", "alert"):
                 if self.delivered_bytes + len(raw) > self._limit:
                     self.dropped_bytes += len(raw)
                     continue
@@ -597,6 +598,7 @@ class Runner:
             "watch_dir": str(call.watch.watch_dir),
             "data_dir": str(call.data_dir),
             "run_dir": str(call.run_dir),
+            "alerts_file": str(call.alerts_file) if call.alerts_file is not None else None,
             "poll_id": call.poll_id,
             "condition": call.condition,
             "payload": call.payload,

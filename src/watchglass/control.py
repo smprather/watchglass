@@ -6,6 +6,7 @@ import os
 import time
 from pathlib import Path
 
+from watchglass.alertstore import clear_alerts
 from watchglass.config import Discovery, WatchNotFound, find_watch, is_valid_watch_name
 from watchglass.locks import LockBusy, hold_lock
 from watchglass.offline import OfflineMarker, clear_offline, iso_time, read_offline, write_offline
@@ -63,6 +64,18 @@ def poke_watch(paths: Paths, name: str) -> None:
     request = paths.poke_request(name)
     request.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     request.write_text(str(time.time()), encoding="utf-8")
+
+
+def ack_watch(paths: Paths, name: str) -> int:
+    """Acknowledge a watch's alerts: delete alerts.json. Returns how many were cleared.
+
+    Works with or without a running service: the file is what `status` and the service read, so a clear takes
+    effect at the next poll or status tick.
+    """
+    try:
+        return clear_alerts(paths, name)
+    except OSError as exc:
+        raise ControlError(f"could not clear the alerts of '{name}': {exc}") from None
 
 
 def rename_watch(paths: Paths, discovery: Discovery, old: str, new: str) -> tuple[Path, Path]:

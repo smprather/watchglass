@@ -92,6 +92,34 @@ When the failure count reaches `max_failures` (default 5; `0` means never):
 
 A poll cut short because the service is stopping never takes a watch offline.
 
+## Alerts without going offline: `ctx.alert`
+
+A watch that processes arriving items one at a time (a queue) can meet an item that will never succeed: a
+corrupt bundle, a SHA-256 mismatch, an installer that exits nonzero. Parking the whole watch would leave every
+later, healthy item unprocessed behind the bad one; retrying the bad one forever is worse. From an action,
+quarantine the item and say so:
+
+```python
+ctx.alert("psg-env-2026.11.16_1 failed SHA-256 verification; quarantined in the failed ledger")
+```
+
+Quarantine is the watch's own bookkeeping (a ledger, a directory); `ctx.alert` only records that the operator
+has something to look at:
+
+- **The watch keeps polling and its failure count is untouched.** "Should this watch keep running?" and "has
+  something failed that nobody has seen?" are separate questions.
+- The message is appended to `alerts.json` in the watch's state directory, so it survives a service restart
+  and a later poll that answers `true` cannot wash the row green.
+- A `watch.alert` record is logged at WARNING (shown at the quiet verbosity) and `alert_command` runs with
+  `WATCHGLASS_ALERT_EVENT=degraded`.
+- `watchglass status` and the TUI show the watch as `degraded` and name the newest alert with its age;
+  `status.json` carries the count and the newest alert in `alerts`.
+- `watchglass ack NAME` clears it (in the TUI, `x`; for every watch, `watchglass ack --all`), and
+  `watchglass enable NAME` clears it too. Acknowledging never changes the schedule.
+
+At most 20 alerts are kept: the newest are the ones an operator acts on. `ctx.alert` is refused in `check`
+(a check only observes, and `watchglass poll --dry-run` runs real checks) and needs a non-empty message.
+
 ## alert_command
 
 Set `alert_command` in the global config to be told when a watch goes offline or comes back online:
@@ -100,4 +128,4 @@ Set `alert_command` in the global config to be told when a watch goes offline or
 alert_command = 'notify-send "watchglass: $WATCHGLASS_WATCH $WATCHGLASS_ALERT_EVENT" "$WATCHGLASS_ALERT_REASON"'
 ```
 
-It receives `WATCHGLASS_ALERT_EVENT` (`offline` or `online`), `WATCHGLASS_WATCH` and `WATCHGLASS_ALERT_REASON`, plus the global `[environment]`. A string runs through the platform shell (`/bin/sh -c`, or Windows PowerShell); a list runs directly. Its timeout is `action_timeout` from `[defaults]` (default 60s). Each run is logged as an `alert.end` record; its failures never count against any watch.
+It receives `WATCHGLASS_ALERT_EVENT` (`offline`, `online` or `degraded` — a `ctx.alert`), `WATCHGLASS_WATCH` and `WATCHGLASS_ALERT_REASON`, plus the global `[environment]`. A string runs through the platform shell (`/bin/sh -c`, or Windows PowerShell); a list runs directly. Its timeout is `action_timeout` from `[defaults]` (default 60s). Each run is logged as an `alert.end` record; its failures never count against any watch.

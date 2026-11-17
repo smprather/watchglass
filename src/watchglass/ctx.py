@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from watchglass import platform
+from watchglass.alertstore import record_alert_file
 from watchglass.durations import parse_duration
 from watchglass.protocol import clip
 from watchglass.rejections import rejection_reason
@@ -302,6 +303,7 @@ class Ctx:
         emit: Emit | None = None,
         shell: Sequence[str] | None = None,
         events: Sequence[Mapping[str, Any]] | None = None,
+        alerts_file: Path | None = None,
     ) -> None:
         self.watch = watch
         self.hook = hook
@@ -314,6 +316,7 @@ class Ctx:
         self.log = logging.getLogger(f"watchglass.watch.{watch}")
         self._data_dir = data_dir
         self._run_dir = run_dir
+        self._alerts_file = alerts_file if alerts_file is not None else Path(data_dir).parent / "alerts.json"
         self._deadline = deadline
         self._capture_bytes = capture_bytes
         self._emit = emit or (lambda message: None)
@@ -443,6 +446,24 @@ class Ctx:
         if name not in _HEADLINE_LEVELS:
             raise ValueError(f"invalid headline level {level!r}: use {', '.join(sorted(_HEADLINE_LEVELS))}")
         self._emit({"type": "event", "level": name, "message": message, "fields": fields})
+
+    def alert(self, message: str) -> None:
+        """Record a persistent alert and keep polling: the watch row turns `degraded` until acknowledged.
+
+        Use it for a failure that is quarantined rather than fatal - the watch has already decided what to do
+        with the bad item, and stopping the schedule would let healthy items queue up behind it. The alert is
+        appended to the watch's `alerts.json` (surviving restarts), logged as a `watch.alert` record at
+        WARNING (so it shows at the quiet verbosity), and runs `alert_command` with
+        `WATCHGLASS_ALERT_EVENT=degraded`. `watchglass ack <watch>` clears it. Not allowed in `check`: a
+        check only observes, and `watchglass poll --dry-run` runs real checks.
+        """
+        text = message.strip()
+        if not text:
+            raise ValueError("ctx.alert needs a message")
+        if self.hook == "check":
+            raise RuntimeError("ctx.alert is not allowed in check: alert from an action (on_true, on_false, ...)")
+        record_alert_file(self._alerts_file, text, hook=self.hook, poll_id=self.poll_id, watch=self.watch)
+        self._emit({"type": "alert", "message": text})
 
     def ledger(self, name: str, expire: str | float | None = None) -> Ledger:
         """Open the persistent ledger `name` (letters, digits, '_', '.', '-').

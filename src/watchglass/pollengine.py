@@ -216,6 +216,9 @@ class PollEngine:
             self._sink(make_record("command", level=level, **tag, **fields))
             return
         level = str(message.get("level")) if message.get("level") in _PLUGIN_LEVELS else "INFO"
+        if message.get("type") == "alert":
+            self._sink(make_record("watch.alert", level="WARNING", **tag, message=message.get("message")))
+            return
         if message.get("type") == "event":
             self._sink(
                 make_record(
@@ -259,6 +262,7 @@ class PollEngine:
             payload=payload,
             data_dir=self._paths.watch_data_dir(watch.name),
             run_dir=self._paths.run_dir(self._pid, watch.name),
+            alerts_file=self._paths.alert_file(watch.name),
             timeout=timeout,
             capture_bytes=self._global.log.capture_bytes,
             environment=self._global.environment,

@@ -26,6 +26,7 @@ import rich_click as click
 from rich.markdown import Markdown
 
 from watchglass import __version__, installcheck, platform, systemd, transfer, winsched
+from watchglass.alertstore import clear_alerts
 from watchglass.config import (
     ConfigError,
     Discovery,
@@ -39,7 +40,15 @@ from watchglass.config import (
     load_global_config,
     load_watch_config,
 )
-from watchglass.control import ControlError, disable_watch, enable_watch, poke_watch, rename_watch, require_known
+from watchglass.control import (
+    ControlError,
+    ack_watch,
+    disable_watch,
+    enable_watch,
+    poke_watch,
+    rename_watch,
+    require_known,
+)
 from watchglass.ctx import CommandFailed
 from watchglass.durations import DurationError, parse_duration
 from watchglass.locks import LockBusy, hold_lock
@@ -63,7 +72,7 @@ COMMAND_GROUPS = {
         {"name": "Run", "commands": ["run", "stop"]},
         {"name": "Develop", "commands": ["new", "validate", "poll", "observe"]},
         {"name": "Inspect", "commands": ["status", "logs", "tui"]},
-        {"name": "Control", "commands": ["enable", "disable", "poke", "rename"]},
+        {"name": "Control", "commands": ["enable", "disable", "poke", "ack", "rename"]},
         {"name": "Setup", "commands": ["init", "install", "uninstall"]},
         {"name": "Hook tools", "commands": ["kit"]},
         {"name": "Reference", "commands": ["docs"]},
@@ -606,7 +615,7 @@ def _control_setup(app: App) -> Discovery:
 @click.argument("name")
 @click.pass_obj
 def enable(app: App, name: str) -> None:
-    """Bring an offline watch back online (deletes its offline.json).
+    """Bring an offline watch back online: deletes its offline.json and acknowledges its alerts.
 
     A running service notices within a second, resets the failure count and polls the watch at once.
 
@@ -620,7 +629,53 @@ def enable(app: App, name: str) -> None:
     if enable_watch(app.paths, name):
         click.echo(f"{name} enabled; a running service polls it within a second")
     else:
-        click.echo(f"{name} was not offline; nothing to do")
+        click.echo(f"{name} was not offline")
+    cleared = clear_alerts(app.paths, name)
+    if cleared:
+        click.echo(f"{name}: acknowledged {cleared} alert{'s' if cleared != 1 else ''}")
+
+
+@cli.command()
+@click.argument("name", required=False)
+@click.option("--all", "all_watches", is_flag=True, help="Acknowledge every watch's alerts.")
+@click.pass_obj
+def ack(app: App, name: str | None, all_watches: bool) -> None:
+    """Acknowledge alerts without touching the schedule (deletes NAME's alerts.json).
+
+    `ctx.alert` records a failure that the watch quarantined and kept polling past; `status` and the TUI show
+    such a watch as `degraded` until its alerts are acknowledged, even after the failure count resets. This
+    clears them, with or without a running service, and the watch polls exactly as it did before.
+
+    Exit status: 0 (also when there was nothing to acknowledge), or 1 if the arguments or NAME are wrong.
+    """
+    if all_watches and name is not None:
+        _fail("give a watch name or --all, not both")
+    if name is None and not all_watches:
+        _fail("give a watch name or --all")
+    discovery = _control_setup(app)
+    if name is not None:
+        try:
+            require_known(app.paths, discovery, name)
+        except ControlError as exc:
+            _fail(str(exc))
+        targets = [name]
+    else:
+        state_root = app.paths.state_home / "watches"
+        names = set(discovery.watches)
+        if state_root.is_dir():
+            names |= {entry.name for entry in state_root.iterdir() if entry.is_dir()}
+        targets = sorted(names)
+    total = 0
+    for watch_name in targets:
+        try:
+            cleared = ack_watch(app.paths, watch_name)
+        except ControlError as exc:
+            _fail(str(exc))
+        total += cleared
+        if cleared:
+            click.echo(f"{watch_name}: acknowledged {cleared} alert{'s' if cleared != 1 else ''}")
+    if not total:
+        click.echo("no unacknowledged alerts")
 
 
 @cli.command()

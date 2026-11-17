@@ -10,6 +10,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from typing import Any
 
+from watchglass.alertstore import alert_key, alert_summary, read_alerts
 from watchglass.config import WatchConfig
 from watchglass.locks import hold_lock
 from watchglass.logstore import Sink, make_record
@@ -105,6 +106,7 @@ class WatchRunner:
         self._observers_lock = threading.Lock()
         self._observer_key: Any = None
         self._poke = False
+        self._alert_key = alert_key(read_alerts(paths, self.name))
 
     @property
     def config(self) -> WatchConfig:
@@ -239,6 +241,18 @@ class WatchRunner:
         self._sink(make_record("watch.online", watch=self.name, reason=reason))
         self._alert("online", self.name, reason)
 
+    def _refresh_alerts(self) -> None:
+        """Run alert_command when a hook recorded a new alert with `ctx.alert`.
+
+        alerts.json is the source of truth, so this notices an alert even when the hook failed right after
+        writing it, and a restart never re-runs alert_command for alerts already recorded.
+        """
+        alerts = read_alerts(self._paths, self.name)
+        key = alert_key(alerts)
+        if key is not None and key != self._alert_key:
+            self._alert("degraded", self.name, alerts[-1].message)
+        self._alert_key = key
+
     def _refresh_offline(self, now: float) -> None:
         marker = read_offline(self._paths, self.name)
         if self.offline is not None and marker is None:
@@ -340,6 +354,7 @@ class WatchRunner:
             if trial:
                 self.last_trial = now
             report = self._engine.poll(config, self.state, trial=trial, events=events, on_hook=self._record_in_flight)
+        self._refresh_alerts()  # a hook may have recorded an alert with ctx.alert during this poll
         self.state = report.after
         if not report.failed and report.outcome in ANSWERS:
             with self._lock:
@@ -399,6 +414,7 @@ class WatchRunner:
             "failures": self.state.failures,
             "rejections": self.state.rejections,
             "offline": self.offline.to_dict() if self.offline else None,
+            "alerts": alert_summary(read_alerts(self._paths, self.name)),
             "last_poll": asdict(self.last_poll) if self.last_poll else None,
             "next_poll": None if wait is None else iso_time(now + wait),
             "config_error": self.config_error,

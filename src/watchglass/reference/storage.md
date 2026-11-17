@@ -9,6 +9,7 @@
 | `$XDG_STATE_HOME/watchglass/logs/watchglass.jsonl` | The log, rotated to `watchglass.jsonl.1`, `.2`, … |
 | `$XDG_STATE_HOME/watchglass/status.json` | Written by the service every master tick, with a `format` number (see `watchglass docs tui`); each watch's entry says whether it is running a hook right now (`in_flight`) and what that hook is transferring (`transfer`: a pull's `part` with its size, or a push's `source` and `dest`). |
 | `$XDG_STATE_HOME/watchglass/watches/<name>/offline.json` | Present while the watch is offline. |
+| `$XDG_STATE_HOME/watchglass/watches/<name>/alerts.json` | Unacknowledged `ctx.alert` messages; deleted by `watchglass ack` (see `watchglass docs failures`). |
 | `$XDG_STATE_HOME/watchglass/watches/<name>/data/` | The watch's persistent storage (`ctx.data_dir`). |
 | `$XDG_STATE_HOME/watchglass/watches/<name>/data/ledgers/<ledger>.json` | Ledgers. |
 | `$XDG_RUNTIME_DIR/watchglass/<pid>/<name>/` | Run-only scratch space for one watchglass process (`ctx.run_dir`). |

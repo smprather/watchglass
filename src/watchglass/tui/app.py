@@ -1,4 +1,5 @@
-"""The Textual app: it renders a Monitor and derives nothing of its own. Its one write is a poke request."""
+"""The Textual app: it renders a Monitor and derives nothing of its own. Its writes are a poke request and an
+acknowledgement (deleting a watch's alerts.json)."""
 
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ from textual.binding import Binding
 from textual.message import Message
 from textual.widgets import DataTable, Footer, RichLog, Static
 
-from watchglass.control import poke_watch
+from watchglass.control import ack_watch, poke_watch
 from watchglass.output import NORMAL, sanitize
 from watchglass.statusview import service_running
 from watchglass.tui import monitor as view
@@ -75,6 +76,7 @@ class WatchglassApp(App[None]):
         Binding("v", "cycle_verbose", "verbosity"),
         Binding("space", "toggle_pause", "pause"),
         Binding("p", "poke", "poke"),
+        Binding("x", "ack", "ack"),
         Binding("r", "rescan", "rescan"),
     ]
 
@@ -316,6 +318,27 @@ class WatchglassApp(App[None]):
         self.selected = event.watch
         self._show_selected()
         self.poke(event.watch)
+
+    def action_ack(self) -> None:
+        """Acknowledge the selected watch's alerts, clearing its `degraded` state."""
+        name = self.selected
+        if name is None:
+            self.notify("select a watch to acknowledge", severity="warning")
+            return
+        self.ack(name)
+
+    def ack(self, name: str) -> None:
+        try:
+            cleared = ack_watch(self.monitor.paths, name)
+        except OSError as exc:
+            self.notify(f"could not acknowledge {name}: {exc}", severity="error")
+            return
+        if cleared:
+            self.notify(f"acknowledged {cleared} alert{'s' if cleared != 1 else ''}: {name}")
+        else:
+            self.notify(f"no unacknowledged alerts: {name}")
+        self.monitor.refresh()
+        self.update_status()
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.row_key is not None and event.row_key.value is not None:

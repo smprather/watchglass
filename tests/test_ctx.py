@@ -20,6 +20,7 @@ from watchglass import (
     LedgerCorrupt,
     LedgerReadOnly,
 )
+from watchglass.alertstore import read_alert_file
 
 
 def make_ctx(tmp_path, hook="on_true", emitted=None, deadline_in=30.0, shell=None):
@@ -349,3 +350,27 @@ def test_an_unreadable_checkpoint_raises_the_documented_error(tmp_path):
             Checkpoint(path)
     finally:
         path.chmod(0o600)
+
+
+def test_alert_records_a_persistent_alert_and_emits_one(tmp_path):
+    """`ctx.alert` is the queue watch's escape hatch: record the failure, keep polling (issue 45)."""
+    emitted = []
+    ctx = make_ctx(tmp_path, emitted=emitted)
+    ctx.alert("  psg-env-1 failed SHA-256 verification  ")
+    (alert,) = read_alert_file(tmp_path / "alerts.json", "w")
+    assert alert.message == "psg-env-1 failed SHA-256 verification"
+    assert alert.hook == "on_true" and alert.poll_id == "p1"
+    assert emitted == [{"type": "alert", "message": "psg-env-1 failed SHA-256 verification"}]
+
+
+def test_alert_refuses_an_empty_message(tmp_path):
+    with pytest.raises(ValueError, match="needs a message"):
+        make_ctx(tmp_path).alert("   ")
+    assert not (tmp_path / "alerts.json").exists()
+
+
+def test_alert_is_refused_in_check(tmp_path):
+    """check only observes; `watchglass poll --dry-run` runs real checks, so a write here would be a side effect."""
+    with pytest.raises(RuntimeError, match="not allowed in check"):
+        make_ctx(tmp_path, hook="check").alert("bad")
+    assert not (tmp_path / "alerts.json").exists()

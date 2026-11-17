@@ -6,6 +6,7 @@ import pytest
 
 from portable import py
 from watchglass import scheduler as scheduler_module
+from watchglass.alertstore import clear_alerts, read_alerts, record_alert
 from watchglass.config import load_global_config, load_watch_config
 from watchglass.offline import OfflineMarker, clear_offline, iso_time, read_offline, write_offline
 from watchglass.pollengine import PollEngine
@@ -377,3 +378,69 @@ def test_user_disable_during_a_poll_wins(xdg, make_watch, runner_for):
     assert read_offline(xdg, "b").by_user is True
     assert [event for event, _, _ in alerts] == ["offline"]
     assert not [r for r in records if r["event"] == "watch.online"]
+
+
+QUEUE_WATCH = '''
+import pathlib
+
+def check(ctx):
+    return True
+
+def on_true(ctx):
+    item = pathlib.Path("bad")
+    if item.exists():
+        ctx.alert(item.read_text())
+        item.unlink()  # quarantine: one alert per bad item, and the poll still succeeds
+'''
+
+
+def test_an_alert_keeps_the_watch_polling_and_runs_alert_command_once(xdg, make_watch, runner_for):
+    """A quarantined item must not park the queue, and the operator must still be told (issue 45)."""
+    watch_dir = make_watch("w", config='interval = "60s"\n', files={"watch.py": QUEUE_WATCH})
+    (watch_dir / "bad").write_text("psg-env-1 failed SHA-256 verification")
+    records, alerts = [], []
+    clock = Clock()
+    runner = runner_for(watch_dir, records, alerts, clock)
+    runner.poll_once(clock())
+    assert [event for event, _, _ in alerts] == ["degraded"]
+    assert alerts[0][1] == "w" and "psg-env-1 failed SHA-256 verification" in alerts[0][2]
+    assert [r["message"] for r in events(records, "watch.alert")] == ["psg-env-1 failed SHA-256 verification"]
+    assert events(records, "watch.alert")[0]["level"] == "WARNING"  # visible at the quiet verbosity
+    snap = runner.snapshot(clock())
+    assert snap["failures"] == 0 and snap["offline"] is None  # still polling, not parked
+    assert snap["alerts"] == {
+        "count": 1,
+        "message": "psg-env-1 failed SHA-256 verification",
+        "since": read_alerts(xdg, "w")[0].since,
+        "hook": "on_true",
+    }
+    clock.now += 60
+    runner.poll_once(clock())
+    assert [event for event, _, _ in alerts] == ["degraded"]  # the same alert is not announced twice
+
+
+def test_ack_then_a_new_alert_runs_alert_command_again(xdg, make_watch, runner_for):
+    watch_dir = make_watch("w", config='interval = "60s"\n', files={"watch.py": QUEUE_WATCH})
+    (watch_dir / "bad").write_text("first item failed")
+    records, alerts = [], []
+    clock = Clock()
+    runner = runner_for(watch_dir, records, alerts, clock)
+    runner.poll_once(clock())
+    assert clear_alerts(xdg, "w") == 1
+    assert runner.snapshot(clock())["alerts"] is None
+    (watch_dir / "bad").write_text("second item failed")
+    clock.now += 60
+    runner.poll_once(clock())
+    assert [event for event, _, _ in alerts] == ["degraded", "degraded"]
+    assert "second item failed" in alerts[-1][2]
+
+
+def test_a_restart_does_not_announce_an_alert_already_recorded(xdg, make_watch, runner_for):
+    watch_dir = make_watch("w", config='interval = "60s"\n', files={"watch.py": QUEUE_WATCH})
+    record_alert(xdg, "w", "recorded before this process started")
+    records, alerts = [], []
+    clock = Clock()
+    runner = runner_for(watch_dir, records, alerts, clock)
+    runner.poll_once(clock())
+    assert alerts == []
+    assert runner.snapshot(clock())["alerts"]["count"] == 1

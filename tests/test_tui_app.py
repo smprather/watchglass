@@ -5,6 +5,7 @@ import time
 
 from textual.widgets import DataTable
 
+from watchglass.alertstore import read_alerts, record_alert
 from watchglass.locks import hold_lock
 from watchglass.logstore import LogWriter, make_record
 from watchglass.offline import OfflineMarker, iso_time, write_offline
@@ -549,6 +550,28 @@ def test_a_removed_watch_with_state_does_not_duplicate_its_row(xdg):
     async def check(app, _pilot):
         names = [cell(app, index, "WATCH") for index in range(len(rows(app)))]
         assert names == ["gone"]
+
+    with running(xdg):
+        monitor.refresh()
+        run_app(monitor, check)
+
+
+def test_x_acknowledges_the_selected_watchs_alerts(xdg, make_watch):
+    make_watch("a", config=WATCH_CONFIG)
+    publish(xdg, status_document(watches={"a": entry()}))
+    record_alert(xdg, "a", "psg-env-1 failed SHA-256")
+    monitor = loaded(xdg)
+
+    async def check(app, pilot):
+        assert app.selected == "a"
+        await pilot.pause(1.1)  # one status tick draws the degraded row
+        assert cell(app, 0, "STATE") == "degraded"
+        assert "1 alert: psg-env-1 failed SHA-256" in cell(app, 0, "NOTE")
+        await pilot.press("x")
+        await pilot.pause()
+        assert read_alerts(xdg, "a") == []
+        assert cell(app, 0, "STATE") == "online"
+        assert cell(app, 0, "NOTE") == ""
 
     with running(xdg):
         monitor.refresh()

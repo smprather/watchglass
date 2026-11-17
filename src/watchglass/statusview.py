@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from watchglass import transfer
+from watchglass.alertstore import alert_summary, read_alerts
 from watchglass.config import Discovery
 from watchglass.durations import format_duration
 from watchglass.locks import probe_lock
@@ -45,6 +46,7 @@ def collect_status(paths: Paths, discovery: Discovery, names: list[str]) -> dict
         entry: dict[str, Any] = dict(saved_watches.get(name) or {"known_to_service": False})
         marker = read_offline(paths, name)
         entry["offline"] = marker.to_dict() if marker else None
+        entry["alerts"] = alert_summary(read_alerts(paths, name))
         entry["exists"] = name in discovery.watches
         watches[name] = entry
     service: dict[str, Any] = {"running": running}
@@ -131,7 +133,8 @@ def in_flight_text(in_flight: dict[str, Any], activity: dict[str, Any] | None, *
 def watch_state(entry: dict[str, Any], *, in_flight: bool = False) -> str:
     """The one state label for a watch entry, shared by `watchglass status` and the TUI.
 
-    Precedence: offline (a marker), parked (enabled = false), transferring/polling, idle (the service does not
+    Precedence: offline (a marker), parked (enabled = false), transferring/polling, degraded (unacknowledged
+    alerts from `ctx.alert`, so a later green poll cannot hide an earlier failure), idle (the service does not
     know the watch), waiting (its last poll answered `unknown`, e.g. the destination is unreachable) and online.
     """
     if entry.get("offline"):
@@ -141,6 +144,9 @@ def watch_state(entry: dict[str, Any], *, in_flight: bool = False) -> str:
         return "parked"
     if entry.get("in_flight") or in_flight:
         return "transferring" if isinstance(entry.get("transfer"), dict) else "polling"
+    alerts = entry.get("alerts")
+    if isinstance(alerts, dict) and isinstance(alerts.get("count"), int) and alerts["count"] > 0:
+        return "degraded"
     known = entry.get("known_to_service")
     if isinstance(known, bool) and not known:
         return "idle"
@@ -184,6 +190,14 @@ def format_status(document: dict[str, Any], now: float) -> list[str]:
             path = transfer.activity_path(transfer_now) if isinstance(transfer_now, dict) else None
             if path:
                 lines.append(f"      -> {path}")  # where the bytes are going (issue 31)
+        alerts = entry.get("alerts")
+        if isinstance(alerts, dict) and isinstance(alerts.get("count"), int) and alerts["count"] > 0:
+            count = alerts["count"]
+            since = _ago(alerts.get("since"), now)
+            lines.append(
+                f"    {count} unacknowledged alert{'s' if count != 1 else ''}: {alerts.get('message')} "
+                f"({since} ago); clear with: watchglass ack {name}"
+            )
         last = entry.get("last_poll")
         if isinstance(last, dict) and last.get("outcome") == "unknown":
             reason = last.get("reason")
